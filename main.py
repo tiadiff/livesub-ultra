@@ -1,29 +1,49 @@
 import sys
 import os
 import time
+import logging
+
+# Setup Logging
+logging.basicConfig(
+    filename='livesub.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filemode='w'
+)
+logger = logging.getLogger("LiveSub")
+logger.info("--- LiveSub Ultra Starting ---")
 
 # --- FIX NVIDIA CUDA DLLs ---
 if sys.platform == 'win32':
-    # Support for PyInstaller bundled DLLs
-    if getattr(sys, 'frozen', False):
-        base_path = sys._MEIPASS
-        nvidia_root = os.path.join(base_path, 'nvidia')
-        if os.path.exists(nvidia_root):
-            for sub in os.listdir(nvidia_root):
-                bin_dir = os.path.join(nvidia_root, sub, 'bin')
-                if os.path.exists(bin_dir):
-                    os.add_dll_directory(bin_dir)
-                    os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
-    
-    # Support for standard pip installation
-    for path in sys.path:
-        if 'site-packages' in path:
-            for lib in ['cublas', 'cudnn', 'cublas_cu12', 'cudnn_cu12']:
-                lib_path = os.path.join(path, 'nvidia', lib, 'bin')
-                if os.path.exists(lib_path):
-                    if hasattr(os, "add_dll_directory"):
-                        os.add_dll_directory(lib_path)
-                    os.environ["PATH"] = lib_path + os.pathsep + os.environ["PATH"]
+    try:
+        # Support for PyInstaller bundled DLLs
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+            nvidia_root = os.path.join(base_path, 'nvidia')
+            if os.path.exists(nvidia_root):
+                for sub in os.listdir(nvidia_root):
+                    bin_dir = os.path.join(nvidia_root, sub, 'bin')
+                    if os.path.exists(bin_dir):
+                        try:
+                            os.add_dll_directory(bin_dir)
+                            os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
+                        except Exception:
+                            pass
+        
+        # Support for standard pip installation
+        for path in sys.path:
+            if 'site-packages' in path:
+                for lib in ['cublas', 'cudnn', 'cublas_cu12', 'cudnn_cu12']:
+                    lib_path = os.path.join(path, 'nvidia', lib, 'bin')
+                    if os.path.exists(lib_path):
+                        try:
+                            if hasattr(os, "add_dll_directory"):
+                                os.add_dll_directory(lib_path)
+                            os.environ["PATH"] = lib_path + os.pathsep + os.environ["PATH"]
+                        except Exception:
+                            pass
+    except Exception as e:
+        print(f"DLL Load Warning: {e}")
 
 from PyQt6.QtWidgets import QApplication
 from audio_capture import AudioCapture
@@ -83,9 +103,17 @@ class LiveSubApp:
         QTimer.singleShot(500, self._do_restart)
 
     def _do_restart(self):
-        print("Restarting services now...")
-        self.stop_services()
-        self.start_services()
+        try:
+            print("Restarting services now...")
+            self.stop_services()
+            # Piccola pausa extra per liberare VRAM
+            time.sleep(0.5)
+            self.start_services()
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self.window, "LiveSub - Errore Riavvio", 
+                                f"Impossibile riavviare i servizi:\n\n{e}")
+            logger.error(f"Restart failed: {e}")
 
     def run(self):
         try:
@@ -94,9 +122,22 @@ class LiveSubApp:
             self.stop_services()
 
 def main():
-    print("--- LiveSub v1.2 ---")
-    app_instance = LiveSubApp()
-    app_instance.run()
+    try:
+        print("--- LiveSub v1.2 ---")
+        app_instance = LiveSubApp()
+        app_instance.run()
+    except Exception as e:
+        import traceback
+        error_msg = f"Errore fatale all'avvio:\n\n{str(e)}\n\n{traceback.format_exc()}"
+        print(error_msg)
+        try:
+            from PyQt6.QtWidgets import QMessageBox, QApplication
+            if not QApplication.instance():
+                dummy_app = QApplication(sys.argv)
+            QMessageBox.critical(None, "LiveSub Ultra - CRASH", error_msg)
+        except:
+            pass
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

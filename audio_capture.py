@@ -2,8 +2,11 @@ import pyaudiowpatch as pyaudio
 import numpy as np
 import threading
 import queue
+import logging
 
 from scipy import signal
+
+logger = logging.getLogger("LiveSub")
 
 class AudioCapture(threading.Thread):
     def __init__(self, device_index=None, sample_rate=16000, chunk_size=8192):
@@ -20,23 +23,23 @@ class AudioCapture(threading.Thread):
             
     def _find_loopback_device(self):
         # Find the default loopback device
-        print("Looking for loopback devices...")
+        logger.info("Looking for loopback devices...")
         wasapi_info = self.p.get_host_api_info_by_type(pyaudio.paWASAPI)
         default_speakers = self.p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
         
-        print(f"Default speakers: {default_speakers['name']}")
+        logger.info(f"Default speakers: {default_speakers['name']}")
         
         for loopback in self.p.get_loopback_device_info_generator():
-            print(f"Checking loopback: {loopback['name']}")
+            logger.info(f"Checking loopback: {loopback['name']}")
             if default_speakers["name"] in loopback["name"]:
-                print(f"Selected loopback device: {loopback['name']} (ID: {loopback['index']})")
+                logger.info(f"Selected loopback device: {loopback['name']} (ID: {loopback['index']})")
                 return loopback["index"]
         
         # Fallback: list all and pick the first with [Loopback]
         for i in range(self.p.get_device_count()):
             dev = self.p.get_device_info_by_index(i)
             if dev.get("isLoopbackDevice") and dev["hostApi"] == wasapi_info["index"]:
-                print(f"Fallback selected loopback: {dev['name']} (ID: {i})")
+                logger.info(f"Fallback selected loopback: {dev['name']} (ID: {i})")
                 return i
                 
         return wasapi_info["defaultOutputDevice"]

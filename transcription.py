@@ -5,6 +5,9 @@ import os
 import sys
 import queue
 import time
+import logging
+
+logger = logging.getLogger("LiveSub")
 
 # Fix for CUDA DLLs on Windows
 def setup_cuda_dlls():
@@ -82,16 +85,16 @@ class TranscriptionWorker(threading.Thread):
         self.status_callback(f"Inizializzazione IA ({model_size})...")
         
         try:
+            logger.info(f"Loading primary model: {model_size} on {device}")
+            self.model_v3 = WhisperModel(
+                model_size, 
+                device=device, 
+                compute_type=compute_type,
+                num_workers=2
+            )
+            
             if use_stacking:
-                # 1. PRIMARY GPU (Float16)
-                self.status_callback(f"Caricamento {model_size} (GPU, {compute_type})...")
-                self.model_v3 = WhisperModel(
-                    model_size, 
-                    device=device, 
-                    compute_type=compute_type,
-                    num_workers=2
-                )
-                
+                logger.info("Loading secondary stacking models...")
                 # 2. LARGE-V2 CPU (Spostato qui per liberare la GPU)
                 self.status_callback("Caricamento Large-V2 (CPU, RAM)...")
                 self.model_v2 = WhisperModel(
@@ -113,11 +116,6 @@ class TranscriptionWorker(threading.Thread):
             else:
                 # Single Model Mode
                 self.status_callback(f"Caricamento {model_size} ({device}, {compute_type})...")
-                self.model_v3 = WhisperModel(
-                    model_size, 
-                    device=device, 
-                    compute_type=compute_type
-                )
                 self.model_v2 = None
                 self.model_cpu = None
                 self.status_callback(f"IA Pronta ({model_size}).")
@@ -153,16 +151,9 @@ class TranscriptionWorker(threading.Thread):
                     segments, _ = self.model_v3.transcribe(
                         processed_audio, 
                         language="it",
-                        beam_size=5,
-                        best_of=3,
-                        temperature=0,
-                        word_timestamps=True,
-                        condition_on_previous_text=False,
-                        repetition_penalty=1.2,
-                        no_repeat_ngram_size=3,
-                        vad_filter=True,
-                        vad_parameters=dict(min_speech_duration_ms=250),
-                        initial_prompt="Trascrizione veloce, solo testo, niente punteggiatura."
+                        beam_size=2,
+                        vad_filter=False,
+                        initial_prompt="Sottotitoli."
                     )
                     
                     # Facciamo girare gli altri in background per saturare l'hardware se presenti
@@ -172,58 +163,23 @@ class TranscriptionWorker(threading.Thread):
                         _ = self.model_cpu.transcribe(processed_audio, language="it", beam_size=1)
                     
                     new_words = []
-                    blacklist = [
-                        "grazie", "iscrivetevi", "canale", "sottotitoli", 
-                        "visione", "guardato", "prossimo video"
-                    ]
-                    
                     for segment in segments:
-                        # Se il segmento intero puzza di allucinazione (troppo corto o frasi fatte)
-                        seg_text = segment.text.lower().strip()
-                        if any(b in seg_text for b in ["iscrivetevi al canale", "grazie per la visione"]):
-                            continue
-                            
-                        if segment.words:
-                            for word in segment.words:
-                                import re
-                                w = word.word.strip().lower()
-                                w = re.sub(r'[^\w\s]', '', w)
-                                
-                                # Filtro parole singole della blacklist solo se sospette
-                                if w in blacklist and len(segment.words) < 3:
-                                    continue
-                                if w: new_words.append(w)
+                        seg_text = segment.text.strip()
+                        if seg_text:
+                            new_words.extend(seg_text.split())
                     
-                    if len(new_words) > 2:
-                        # Safety margin: non mostriamo l'ultima parola
-                        current_ai_words = new_words[:-1]
-                        
-                        # Recuperiamo la storia recente (ultime 10 parole mostrate)
-                        history = self.last_display_text.split()
-                        
-                        # LOGICA OVERLAP: Cerchiamo dove la nuova trascrizione si aggancia alla storia
-                        # Proviamo a far combaciare le ultime 2 o 3 parole della storia
-                        start_index = 0
-                        if len(history) >= 2:
-                            anchor = history[-2:] # Ultime 2 parole mostrate
-                            # Cerchiamo l'ancora nella nuova trascrizione
-                            for i in range(len(current_ai_words) - 1):
-                                if current_ai_words[i:i+2] == anchor:
-                                    start_index = i + 2
-                                    break
-                        
-                        # Prendiamo solo quello che viene DOPO l'ancora
-                        words_to_add = current_ai_words[start_index:]
-                        
-                        if words_to_add:
-                            # Aggiorniamo il testo aggiungendo solo il nuovo
-                            full_text_list = history + words_to_add
-                            # Teniamo solo le ultime 10 parole per pulizia UI
-                            display_text = " ".join(full_text_list[-10:])
-                            
-                            if display_text != self.last_display_text:
-                                self.result_callback(display_text)
-                                self.last_display_text = display_text
+                    if new_words:
+                        logger.info(f"Raw words detected: {' '.join(new_words)}")
+                        # Simple overlap logic for real-time
+                        display_text = " ".join(new_words)
+                        if display_text != self.last_display_text:
+                            self.result_callback(display_text)
+                            self.last_display_text = display_text
+                    else:
+                        if not hasattr(self, 'silence_count'): self.silence_count = 0
+                        self.silence_count += 1
+                        if self.silence_count % 10 == 0:
+                            logger.info("Still no words detected in audio stream.")
                 
                 time.sleep(0.1)
             except Exception as e:
