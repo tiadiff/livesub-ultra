@@ -153,7 +153,7 @@ class TranscriptionWorker(threading.Thread):
                         language="it",
                         beam_size=2,
                         vad_filter=False,
-                        initial_prompt="Sottotitoli."
+                        initial_prompt="Trascrizione pulita senza punteggiatura."
                     )
                     
                     # Facciamo girare gli altri in background per saturare l'hardware se presenti
@@ -162,24 +162,34 @@ class TranscriptionWorker(threading.Thread):
                     if self.model_cpu:
                         _ = self.model_cpu.transcribe(processed_audio, language="it", beam_size=1)
                     
+                    import re
                     new_words = []
+                    blacklist = ["sottotitoli", "grazie", "visione", "iscrivetevi", "canale", "prossimo", "video"]
+                    
                     for segment in segments:
+                        # Rimuoviamo punteggiatura e puliamo
                         seg_text = segment.text.strip()
-                        if seg_text:
-                            new_words.extend(seg_text.split())
+                        # Filtro allucinazioni lunghe
+                        if any(b in seg_text.lower() for b in ["grazie per la visione", "sottotitoli"]):
+                            continue
+                            
+                        words = seg_text.split()
+                        for w in words:
+                            clean_w = re.sub(r'[^\w\s]', '', w).lower().strip()
+                            # Salta se la parola è in blacklist o è un simbolo residuo
+                            if clean_w in blacklist or not clean_w:
+                                continue
+                            new_words.append(w) # Teniamo l'originale per il display (case)
                     
                     if new_words:
-                        logger.info(f"Raw words detected: {' '.join(new_words)}")
-                        # Simple overlap logic for real-time
+                        logger.info(f"Filtered words: {' '.join(new_words)}")
                         display_text = " ".join(new_words)
                         if display_text != self.last_display_text:
                             self.result_callback(display_text)
                             self.last_display_text = display_text
                     else:
-                        if not hasattr(self, 'silence_count'): self.silence_count = 0
-                        self.silence_count += 1
-                        if self.silence_count % 10 == 0:
-                            logger.info("Still no words detected in audio stream.")
+                        # Silenzio o tutto filtrato
+                        pass
                 
                 time.sleep(0.1)
             except Exception as e:
