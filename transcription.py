@@ -139,29 +139,15 @@ class TranscriptionWorker(threading.Thread):
                     self.buffer = self.buffer[-self.max_buffer_len:]
                 
                 if len(self.buffer) >= self.sample_rate * 0.2:
-                    # 2. Pre-elaborazione CPU (Noise reduction & Normalization)
+                    # 2. Pre-elaborazione Leggera (Noise reduction)
                     raw_audio = np.array(self.buffer, dtype=np.float32)[-int(self.sample_rate * 2.5):]
                     
-                    # Normalizzazione software (Sforzo CPU)
                     max_val = np.max(np.abs(raw_audio))
-                    if max_val > 0:
+                    if max_val > 0.01:
                         processed_audio = raw_audio / max_val
                     else:
                         processed_audio = raw_audio
                         
-                    # 2. Pre-elaborazione Spettrale Pesante (Stress CPU)
-                    # Trasformata di Fourier per pulizia profonda e sforzo CPU
-                    fft_audio = np.fft.rfft(processed_audio)
-                    
-                    # Loop Dinamico (Stress bilanciato per zero lag)
-                    for _ in range(50): 
-                        magnitude = np.abs(fft_audio)
-                        phase = np.angle(fft_audio)
-                        fft_audio = fft_audio * np.exp(1j * phase * 0.001)
-                        fft_audio = np.where(magnitude > (np.mean(magnitude) * 0.05), fft_audio, fft_audio * 0.1)
-                        
-                    processed_audio = np.fft.irfft(fft_audio).astype(np.float32)
-                    
                     # 3. Trascrizione Triple-Engine (Massimo Carico)
                     # Usiamo il V3 come primario, ma facciamo lavorare tutti
                     segments, _ = self.model_v3.transcribe(

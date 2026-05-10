@@ -4,6 +4,18 @@ import time
 
 # --- FIX NVIDIA CUDA DLLs ---
 if sys.platform == 'win32':
+    # Support for PyInstaller bundled DLLs
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+        nvidia_root = os.path.join(base_path, 'nvidia')
+        if os.path.exists(nvidia_root):
+            for sub in os.listdir(nvidia_root):
+                bin_dir = os.path.join(nvidia_root, sub, 'bin')
+                if os.path.exists(bin_dir):
+                    os.add_dll_directory(bin_dir)
+                    os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
+    
+    # Support for standard pip installation
     for path in sys.path:
         if 'site-packages' in path:
             for lib in ['cublas', 'cudnn', 'cublas_cu12', 'cudnn_cu12']:
