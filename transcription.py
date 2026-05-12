@@ -137,23 +137,37 @@ class TranscriptionWorker(threading.Thread):
                     self.buffer = self.buffer[-self.max_buffer_len:]
                 
                 if len(self.buffer) >= self.sample_rate * 0.2:
-                    # 2. Pre-elaborazione Leggera (Noise reduction)
-                    raw_audio = np.array(self.buffer, dtype=np.float32)[-int(self.sample_rate * 2.5):]
+                    # 2. Pre-elaborazione Leggera (AGC & Context Window)
+                    context_seconds = float(self.settings.get("context_window", 5.0))
+                    raw_audio = np.array(self.buffer, dtype=np.float32)[-int(self.sample_rate * context_seconds):]
                     
+                    # Auto-Gain Control (AGC) Digitale
                     max_val = np.max(np.abs(raw_audio))
-                    if max_val > 0.01:
-                        processed_audio = raw_audio / max_val
+                    if max_val > 0.001:
+                        processed_audio = (raw_audio / max_val) * 0.9
                     else:
                         processed_audio = raw_audio
                         
-                    # 3. Trascrizione Triple-Engine (Massimo Carico)
-                    # Usiamo il V3 come primario, ma facciamo lavorare tutti
+                    # 3. Trascrizione Dinamica
+                    beam_size = int(self.settings.get("beam_size", 5))
+                    vad_on = self.settings.get("vad_filter", True)
+                    vad_thresh = float(self.settings.get("vad_threshold", 0.4))
+                    rep_penalty = float(self.settings.get("repetition_penalty", 1.2))
+                    
+                    user_prompt = self.settings.get("initial_prompt", "trascrizione in minuscolo senza punteggiatura.")
+                    if self.settings.get("no_censorship", False):
+                        user_prompt += " parolacce permesse."
+                    
                     segments, _ = self.model_v3.transcribe(
                         processed_audio, 
                         language="it",
-                        beam_size=2,
-                        vad_filter=False,
-                        initial_prompt="Trascrizione pulita senza punteggiatura."
+                        beam_size=beam_size,
+                        best_of=beam_size if beam_size > 1 else 1,
+                        temperature=0,
+                        repetition_penalty=rep_penalty,
+                        vad_filter=vad_on,
+                        vad_parameters=dict(min_speech_duration_ms=300, threshold=vad_thresh),
+                        initial_prompt=user_prompt
                     )
                     
                     # Facciamo girare gli altri in background per saturare l'hardware se presenti
@@ -166,29 +180,56 @@ class TranscriptionWorker(threading.Thread):
                     new_words = []
                     blacklist = ["sottotitoli", "grazie", "visione", "iscrivetevi", "canale", "prossimo", "video"]
                     
+                    force_lower = self.settings.get("force_lowercase", True)
+                    no_punct = self.settings.get("no_punctuation", True)
+
                     for segment in segments:
-                        # Rimuoviamo punteggiatura e puliamo
                         seg_text = segment.text.strip()
-                        # Filtro allucinazioni lunghe
-                        if any(b in seg_text.lower() for b in ["grazie per la visione", "sottotitoli"]):
+                        if force_lower:
+                            seg_text = seg_text.lower()
+                            
+                        if any(b in seg_text for b in ["grazie per la visione", "sottotitoli"]):
                             continue
                             
                         words = seg_text.split()
                         for w in words:
-                            clean_w = re.sub(r'[^\w\s]', '', w).lower().strip()
-                            # Salta se la parola è in blacklist o è un simbolo residuo
-                            if clean_w in blacklist or not clean_w:
+                            if no_punct:
+                                w = re.sub(r'[^\w\s]', '', w).strip()
+                            
+                            if force_lower:
+                                w = w.lower()
+                                
+                            if w in blacklist or not w:
                                 continue
-                            new_words.append(w) # Teniamo l'originale per il display (case)
+                            new_words.append(w)
                     
                     if new_words:
-                        logger.info(f"Filtered words: {' '.join(new_words)}")
-                        display_text = " ".join(new_words)
-                        if display_text != self.last_display_text:
-                            self.result_callback(display_text)
-                            self.last_display_text = display_text
+                        # --- LOGICA DI OVERLAP (Per finestra da 5s) ---
+                        history = self.last_display_text.split()
+                        start_index = 0
+                        
+                        # Cerchiamo l'ancora (ultime 3 parole della storia)
+                        if len(history) >= 2:
+                            for i in range(len(new_words) - 1):
+                                # Se troviamo 2 parole consecutive che coincidono con la fine della storia
+                                if new_words[i:i+2] == history[-2:]:
+                                    start_index = i + 2
+                                    break
+                                elif new_words[i:i+1] == history[-1:]:
+                                    start_index = i + 1
+                                    # Non break, cerchiamo se c'è un match migliore (2 parole)
+                        
+                        truly_new = new_words[start_index:]
+                        if truly_new:
+                            logger.info(f"New words: {' '.join(truly_new)}")
+                            full_list = history + truly_new
+                            # Mostriamo le ultime 12 parole per non riempire lo schermo
+                            display_text = " ".join(full_list[-12:])
+                            
+                            if display_text != self.last_display_text:
+                                self.result_callback(display_text)
+                                self.last_display_text = display_text
                     else:
-                        # Silenzio o tutto filtrato
                         pass
                 
                 time.sleep(0.1)

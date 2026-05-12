@@ -68,12 +68,15 @@ class LiveSubApp:
         self.start_services()
 
     def start_services(self):
+        self.signal_bus.update_status.emit("Inizializzazione in corso...")
         settings = self.window.settings
         
         # Audio Capture
         device_idx = settings.get("audio_device_index", -1)
         self.audio_capture = AudioCapture(device_index=device_idx)
         self.audio_capture.start()
+        
+        self.signal_bus.update_status.emit("Caricamento Motori IA (Whisper)...")
         
         # Transcription Worker
         self.transcriber = TranscriptionWorker(
