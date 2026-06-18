@@ -71,23 +71,6 @@ python main.py
 
 ---
 
-## 📦 Building as Executable
-
-If you want to create a standalone `.exe` for Windows:
-1. Ensure `pyinstaller` is installed:
-   ```bash
-   pip install pyinstaller
-   ```
-2. Run the provided build script:
-   ```bash
-   .\build_exe.bat
-   ```
-3. Once completed, you will find `LiveSubUltra.exe` inside the `dist/` folder.
-
-*Note: The executable will be quite large as it packages all necessary AI libraries and CUDA runtimes.*
-
----
-
 ## 📝 License
 Distributed under the MIT License. See `LICENSE` for more information.
 
