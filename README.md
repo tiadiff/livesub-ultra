@@ -65,6 +65,9 @@ Accessible via the right-click menu, the Settings panel allows you to:
    ```
 
 ### Running the App
+Per avviare il programma, fai doppio click sul file `LiveSub.bat`.
+
+Alternatively, from the command line:
 ```bash
 python main.py
 ```
